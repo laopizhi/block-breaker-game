@@ -16,7 +16,7 @@
   const BALL_R_FRAC = 0.13;     // ball radius (fraction of cell)
   const SPEED_FRAC = 20;        // ball speed = cell * this (px/sec)
   const FIRE_INTERVAL = 0.05;   // seconds between balls in a stream
-  const MAX_LEVEL = 6;          // ball damage level cap (dmg = 2**level -> up to 64x)
+  const MAX_LEVEL = 7;          // ball damage level cap (dmg = 2**level -> up to 128x)
   const CHUNK = 2;              // rows that drop/spawn at once, every CHUNK turns
                                 // (avg descent stays 1 row/turn, so difficulty is unchanged)
 
@@ -50,8 +50,8 @@
     cannon: '#33e6ff'
   };
 
-  // Ball damage tiers: index by level (0 = 1x normal ... 6 = 64x). Higher = hotter.
-  const TIER_COLORS = ['#e9fbff', '#ffd23e', '#ff8a3e', '#ff3e6e', '#ff3ea5', '#c58bff', '#ffffff'];
+  // Ball damage tiers: index by level (0 = 1x normal ... 7 = 128x). Higher = hotter.
+  const TIER_COLORS = ['#e9fbff', '#ffd23e', '#ff8a3e', '#ff3e6e', '#ff3ea5', '#c58bff', '#6ea8ff', '#ffffff'];
   function tierColor(level) { return TIER_COLORS[Math.min(level, TIER_COLORS.length - 1)]; }
   function radiusForLevel(level) { return layout.ballR * (1 + Math.min(level, MAX_LEVEL) * 0.12); }
 
@@ -296,12 +296,13 @@
       if (cand.length) cand[Math.floor(Math.random() * cand.length)].type = T.SPLIT;
     }
 
-    // Tokens fill leftover cells: mostly +1 ball / 2x damage, rare specials.
+    // Tokens fill leftover cells. +1 ball stays common (power keeps growing); 2x
+    // damage is the rarer, more prized upgrade.
     const free = [];
     for (let c = 0; c < COLS; c++) if (!used.has(c)) free.push(c);
     if (free.length) {
       const col = free.splice(Math.floor(Math.random() * free.length), 1)[0];
-      game.blocks.push(makeToken(col, Math.random() < 0.72 ? T.BALL : T.DAMAGE, targetRow));
+      game.blocks.push(makeToken(col, Math.random() < 0.86 ? T.BALL : T.DAMAGE, targetRow));
     }
     if (free.length && Math.random() < 0.18) {
       const col = free.splice(Math.floor(Math.random() * free.length), 1)[0];
@@ -460,7 +461,7 @@
   // Weighted pick for the rare bonus token: staples dominate, strong ones are scarce.
   function weightedSpecial() {
     const pool = [
-      [T.DAMAGE, 5], [T.BALL, 4], [T.MULTI, 3], [T.MULT, 2],
+      [T.BALL, 5], [T.MULTI, 3], [T.DAMAGE, 2], [T.MULT, 2],
       [T.FREEZE, 2], [T.PIERCE, 1], [T.LASER, 1]
     ];
     const total = pool.reduce((s, e) => s + e[1], 0);
@@ -605,21 +606,28 @@
         addFloatText('+1 BALL', COLORS.cannon, cx, cy);
         break;
       case T.DAMAGE: {
-        // Upgrade ONE ball: the collecting ball's own slot climbs a tier
-        // (2x -> 4x -> 8x ...). A temp/scatter ball has no slot, so it boosts
-        // the weakest owned ball instead of being wasted.
-        let slot;
-        if (ball && ball.slotIndex != null && game.ballSlots[ball.slotIndex]) {
-          slot = game.ballSlots[ball.slotIndex];
-        } else {
-          slot = game.ballSlots.reduce((a, b) => (b.level < a.level ? b : a), game.ballSlots[0]);
+        // Upgrade ONE ball a tier (2x -> 4x -> ... -> 128x). Normally the ball that
+        // collected it — but if that ball is already maxed (or it's a temp ball with
+        // no slot), redirect the boost to a RANDOM ball that hasn't maxed yet, so it
+        // is never wasted.
+        let idx = (ball && ball.slotIndex != null && game.ballSlots[ball.slotIndex]) ? ball.slotIndex : -1;
+        const collectorMaxed = idx >= 0 && game.ballSlots[idx].level >= MAX_LEVEL;
+        if (idx < 0 || collectorMaxed) {
+          const below = game.ballSlots.map((_, i) => i).filter((i) => game.ballSlots[i].level < MAX_LEVEL);
+          idx = below.length ? below[Math.floor(Math.random() * below.length)] : -1;
         }
+        if (idx < 0) {                 // every ball is already at max
+          addFloatText('MAX', tierColor(MAX_LEVEL), cx, cy);
+          break;
+        }
+        const slot = game.ballSlots[idx];
         slot.level = Math.min(MAX_LEVEL, slot.level + 1);
-        // Reflect the upgrade on the in-flight ball right away.
-        if (ball) {
-          ball.level = slot.level;
-          ball.dmg = 2 ** slot.level;
-          ball.r = radiusForLevel(slot.level);
+        // Reflect the upgrade on whichever in-flight ball is bound to that slot.
+        const inflight = game.balls.find((bb) => bb.slotIndex === idx);
+        if (inflight) {
+          inflight.level = slot.level;
+          inflight.dmg = 2 ** slot.level;
+          inflight.r = radiusForLevel(slot.level);
         }
         addFloatText((2 ** slot.level) + '× DMG', tierColor(slot.level), cx, cy);
         break;

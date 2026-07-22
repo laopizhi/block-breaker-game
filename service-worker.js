@@ -1,5 +1,5 @@
 // Simple cache-first service worker for offline play.
-const CACHE = 'neon-breaker-v8';
+const CACHE = 'neon-breaker-v9';
 const ASSETS = [
   './',
   './index.html',
