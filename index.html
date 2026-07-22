@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0a12" />
+  <!-- iOS "Add to Home Screen" -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Neon Breaker" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <title>Neon Block Breaker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="game"></canvas>
+
+    <!-- Heads-up display -->
+    <div id="hud" class="hud">
+      <div class="hud-stat">
+        <span class="hud-label">ROUND</span>
+        <span id="roundVal" class="hud-value">1</span>
+      </div>
+      <div class="hud-stat">
+        <span class="hud-label">SCORE</span>
+        <span id="scoreVal" class="hud-value">0</span>
+      </div>
+      <div class="hud-stat">
+        <span class="hud-label">BEST</span>
+        <span id="bestVal" class="hud-value">0</span>
+      </div>
+    </div>
+
+    <!-- Recall button -->
+    <button id="recallBtn" class="recall-btn" aria-label="Recall balls and skip to next round">
+      <span class="recall-icon">⟲</span> RECALL
+    </button>
+
+    <!-- Start overlay -->
+    <div id="startScreen" class="overlay">
+      <div class="overlay-card">
+        <h1 class="title">NEON<br />BREAKER</h1>
+        <p class="subtitle">Aim. Shoot. Smash the numbers.</p>
+        <button id="startBtn" class="big-btn">TAP TO START</button>
+        <p class="hint" id="controlHint">Drag to aim &middot; release to fire</p>
+      </div>
+    </div>
+
+    <!-- Game over overlay -->
+    <div id="gameOverScreen" class="overlay hidden">
+      <div class="overlay-card">
+        <h1 class="title small">GAME OVER</h1>
+        <div class="result-row"><span>Round</span><span id="finalRound">0</span></div>
+        <div class="result-row"><span>Score</span><span id="finalScore">0</span></div>
+        <div class="result-row best"><span>Best</span><span id="finalBest">0</span></div>
+        <button id="restartBtn" class="big-btn">PLAY AGAIN</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/game.js?v=7"></script>
+</body>
+</html>

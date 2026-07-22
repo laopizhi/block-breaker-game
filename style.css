@@ -1,0 +1,159 @@
+:root {
+  --bg: #0a0a12;
+  --neon-cyan: #33e6ff;
+  --neon-pink: #ff3ea5;
+  --neon-purple: #a06bff;
+  --text: #eaf2ff;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  touch-action: none;
+}
+
+#game {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+/* ---------- HUD ---------- */
+.hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding: calc(env(safe-area-inset-top) + 10px) 16px 8px;
+  pointer-events: none;
+  z-index: 5;
+}
+.hud-stat { display: flex; flex-direction: column; align-items: center; }
+.hud-label {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: rgba(234, 242, 255, 0.5);
+}
+.hud-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 10px rgba(51, 230, 255, 0.7);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Recall button ---------- */
+.recall-btn {
+  position: absolute;
+  right: 16px;
+  bottom: calc(env(safe-area-inset-bottom) + 16px);
+  z-index: 5;
+  padding: 12px 18px;
+  border: 1.5px solid var(--neon-pink);
+  border-radius: 30px;
+  background: rgba(255, 62, 165, 0.12);
+  color: var(--neon-pink);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 0 16px rgba(255, 62, 165, 0.35);
+  transition: transform 0.08s ease, background 0.15s ease;
+}
+.recall-btn:active { transform: scale(0.94); background: rgba(255, 62, 165, 0.25); }
+.recall-btn.hidden { display: none; }
+.recall-icon { font-size: 16px; }
+
+/* ---------- Overlays ---------- */
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(10,10,25,0.72), rgba(5,5,12,0.92));
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.overlay.hidden { display: none; }
+
+.overlay-card {
+  text-align: center;
+  padding: 32px 28px;
+  max-width: 86%;
+}
+
+.title {
+  font-size: 46px;
+  font-weight: 800;
+  line-height: 1.02;
+  letter-spacing: 2px;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 18px rgba(51,230,255,0.8), 0 0 40px rgba(51,230,255,0.4);
+}
+.title.small { font-size: 34px; color: var(--neon-pink); text-shadow: 0 0 18px rgba(255,62,165,0.8); }
+
+.subtitle {
+  margin-top: 14px;
+  font-size: 15px;
+  color: rgba(234,242,255,0.7);
+}
+
+.big-btn {
+  margin-top: 28px;
+  padding: 15px 34px;
+  border: none;
+  border-radius: 34px;
+  background: linear-gradient(135deg, var(--neon-cyan), var(--neon-purple));
+  color: #05050c;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  cursor: pointer;
+  box-shadow: 0 0 26px rgba(51,230,255,0.5);
+  transition: transform 0.08s ease;
+}
+.big-btn:active { transform: scale(0.95); }
+
+.hint {
+  margin-top: 18px;
+  font-size: 12.5px;
+  color: rgba(234,242,255,0.45);
+  letter-spacing: 0.5px;
+}
+
+.result-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 40px;
+  margin-top: 14px;
+  font-size: 18px;
+  padding: 4px 6px;
+  color: rgba(234,242,255,0.85);
+}
+.result-row span:last-child { font-weight: 700; color: var(--neon-cyan); }
+.result-row.best span:last-child { color: var(--neon-pink); }
