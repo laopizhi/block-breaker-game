@@ -17,10 +17,24 @@
   const SPEED_FRAC = 20;        // ball speed = cell * this (px/sec)
   const FIRE_INTERVAL = 0.05;   // seconds between balls in a stream
   const MAX_LEVEL = 6;          // ball damage level cap (dmg = 2**level -> up to 64x)
-  const HP_SCALE = 1.7;         // block hp growth per round (higher = harder faster)
-  const HP_ACCEL = 0.06;        // quadratic ramp so late rounds get tough quickly
   const CHUNK = 2;              // rows that drop/spawn at once, every CHUNK turns
                                 // (avg descent stays 1 row/turn, so difficulty is unchanged)
+
+  // --- Difficulty scales off the player's FIREPOWER, not the round number ---
+  // Firepower F = total ball damage (sum of 2**level) * a small coverage bonus.
+  const COVERAGE = 0.015;       // per extra ball, how much coverage adds to firepower
+  const HP_A = 0.9;             // block hp = HP_A * F**HP_P + HP_B  (scales blocks to your power)
+  const HP_P = 1.08;            // >1 so the board slowly outpaces raw firepower (gentle ramp)
+  const HP_B = 1;               // flat hp floor
+  const HP_BIG = 1.9;           // "big" block hp multiplier
+  const DENS_START = 6;         // firepower at which boards begin to thicken
+  const DENS_SCALE = 90;        // firepower span over which density climbs to DENS_MAX
+  const DENS_MAX = 0.45;        // max extra fill probability from density
+  // Rare "spice" special blocks (flat frequency at all stages)
+  const SPLIT_CHANCE = 0.05;    // chance per spawned row to make one block a splitter
+  const BOSS_CHANCE = 0.10;     // chance per chunk to spawn a boss (if allowed)
+  const BOSS_COOLDOWN = 12;     // min rounds between bosses
+  const BOSS_HP_MULT = 4;       // boss weak-point hp = blockHp() * this
   const AIM_MIN_UP = 0.16;      // min upward component of aim direction
   const TOUCH_SENS = 0.005;     // touch aim: radians of tilt per pixel of horizontal drag
                                 // (small = low sensitivity). Lower this to make it calmer.
@@ -52,7 +66,9 @@
     PIERCE: 'p_pierce',    // balls pass through blocks
     FREEZE: 'p_freeze',    // skip descent one round
     MULT: 'p_mult',        // x2 score for a few rounds
-    SHIELD: 'p_shield'     // one-time save
+    SHIELD: 'p_shield',    // one-time save
+    SPLIT: 'split',        // splits into two smaller blocks when destroyed
+    BOSS: 'boss'           // 2x2 armored block, only its weak-point cell takes damage
   };
   const POWERUPS = [T.BALL, T.DAMAGE, T.MULTI, T.LASER, T.PIERCE, T.FREEZE, T.MULT, T.SHIELD];
 
@@ -118,6 +134,20 @@
     };
   }
 
+  // Pixel box for a (possibly multi-cell) block spanning bW x bH cells.
+  function blockBox(b) {
+    const c = layout.cell, g = layout.gap;
+    const bW = b.w || 1, bH = b.h || 1;
+    return {
+      x: b.col * c + g,
+      y: layout.gridTop + b.row * c + g,
+      w: bW * c - g * 2,
+      h: bH * c - g * 2,
+      cx: b.col * c + (bW * c) / 2,
+      cy: layout.gridTop + b.row * c + (bH * c) / 2
+    };
+  }
+
   // ---------------------------------------------------------------------
   // Game state
   // ---------------------------------------------------------------------
@@ -146,6 +176,8 @@
       lasers: [],
       pattern: null,             // stateful layout generator {name, ttl, data}
       chunkTick: 0,              // turns since the last chunk dropped
+      dens: 0,                   // current board density bias (from firepower)
+      lastBossRound: -999,       // round the last boss spawned (for cooldown)
 
       // firing bookkeeping
       fireQueue: [],             // slot indices still to launch this shot
@@ -189,46 +221,79 @@
   // ---------------------------------------------------------------------
   // Block / powerup spawning
   // ---------------------------------------------------------------------
+  // Find a live block covering (col,row) — accounts for multi-cell (boss) blocks.
   function blockAt(col, row) {
     for (const b of game.blocks) {
-      if (b.col === col && b.row === row && b.hp > 0) return b;
+      if (b.hp <= 0) continue;
+      const bW = b.w || 1, bH = b.h || 1;
+      if (col >= b.col && col < b.col + bW && row >= b.row && row < b.row + bH) return b;
     }
     return null;
   }
 
-  // Block hit points scale super-linearly with the round so it ramps up.
-  function blockHp(round, big) {
-    const base = round * HP_SCALE + round * round * HP_ACCEL;
-    const v = big ? base * 2 : base + (Math.random() * 3 - 1);
+  // Total firepower: sum of each ball's single-hit damage (2**level), lightly
+  // boosted by ball count (more balls = more coverage). Difficulty scales off this.
+  function firepower() {
+    let dmg = 0;
+    for (const s of game.ballSlots) dmg += 2 ** s.level;
+    return dmg * (1 + COVERAGE * Math.max(0, game.ballSlots.length - 1));
+  }
+
+  // Block hit points scale off the player's firepower (gently super-linear), so the
+  // board is always a challenging fraction of what you can output — not the clock.
+  function blockHp(big) {
+    const F = firepower();
+    const t = HP_A * Math.pow(F, HP_P) + HP_B;
+    const v = big ? t * HP_BIG : t * (0.75 + Math.random() * 0.5);
     return Math.max(1, Math.round(v));
   }
 
   function spawnRow(targetRow = 0) {
-    const round = game.round;
+    // Density bias grows with firepower — boards thicken as you get stronger.
+    game.dens = clamp((firepower() - DENS_START) / DENS_SCALE, 0, DENS_MAX);
 
     // Pick or continue a multi-row layout pattern so structures actually form.
     if (!game.pattern || game.pattern.ttl <= 0) game.pattern = pickPattern();
-    const row = PATTERNS[game.pattern.name](round, game.pattern.data);
+    const row = PATTERNS[game.pattern.name](game.round, game.pattern.data);
     game.pattern.ttl--;
+
+    // Thicken: fill some empty cells with probability `dens`, but always leave
+    // at least 3 open cells (>=1 gap to shoot through + room for the tokens).
+    const emptyCols = shuffle([...Array(COLS).keys()].filter((c) => !row[c]));
+    const maxThicken = Math.max(0, emptyCols.length - 3);
+    let thickened = 0;
+    for (const c of emptyCols) {
+      if (thickened >= maxThicken) break;
+      if (Math.random() < game.dens) { row[c] = 'square'; thickened++; }
+    }
 
     // Safety: never a fully solid row (must stay playable), and never fully empty.
     let filled = row.filter(Boolean).length;
-    if (filled === COLS) row[Math.floor(Math.random() * COLS)] = null;
+    if (filled >= COLS) row[Math.floor(Math.random() * COLS)] = null;
     if (filled === 0) row[Math.floor(Math.random() * COLS)] = 'square';
 
     const used = new Set();
+    const rowBlocks = [];
     for (let col = 0; col < COLS; col++) {
       const cell = row[col];
       if (!cell) continue;
       used.add(col);
       const isBig = Math.random() < 0.16;
-      const hp = blockHp(round, isBig);
+      const hp = blockHp(isBig);
       // 'square' cells occasionally become triangles for variety; explicit
       // triangle cells (from funnels/tunnels) keep their orientation.
       const shape = cell === 'square'
         ? (Math.random() < 0.14 ? triangleShape() : 'square')
         : cell;
-      game.blocks.push({ id: game.nextId++, type: T.BLOCK, shape, col, row: targetRow, hp, flash: 0 });
+      const b = { id: game.nextId++, type: T.BLOCK, shape, col, row: targetRow, hp, maxHp: hp, flash: 0 };
+      game.blocks.push(b);
+      rowBlocks.push(b);
+    }
+
+    // Rare "spice": promote one plain square in this row to a splitter block.
+    if (rowBlocks.length && Math.random() < SPLIT_CHANCE) {
+      const cand = rowBlocks.filter((b) => b.shape === 'square');
+      if (cand.length) cand[Math.floor(Math.random() * cand.length)].type = T.SPLIT;
     }
 
     // Tokens fill leftover cells: mostly +1 ball / 2x damage, rare specials.
@@ -248,14 +313,50 @@
   // continuing across them so multi-row structures appear together.
   function spawnChunkRows() {
     for (let r = CHUNK - 1; r >= 0; r--) spawnRow(r);
+    maybeSpawnBoss();
+  }
+
+  // Rare 2x2 armored boss with a single weak-point cell. At most one at a time,
+  // gated by a cooldown; carves out a 2x2 region at the top to sit in.
+  function maybeSpawnBoss() {
+    if (game.round - game.lastBossRound < BOSS_COOLDOWN) return;
+    if (game.blocks.some((b) => b.type === T.BOSS)) return;
+    if (Math.random() >= BOSS_CHANCE) return;
+    const c = Math.floor(Math.random() * (COLS - 1));   // occupies cols c..c+1
+    // Clear anything currently in the 2x2 (cols c..c+1, rows 0..1).
+    game.blocks = game.blocks.filter((b) => {
+      const bW = b.w || 1, bH = b.h || 1;
+      const hits = !(b.col + bW <= c || b.col >= c + 2 || b.row + bH <= 0 || b.row >= 2);
+      return !hits;
+    });
+    const hp = Math.round(blockHp(false) * BOSS_HP_MULT);
+    game.blocks.push({
+      id: game.nextId++, type: T.BOSS, shape: 'boss',
+      col: c, row: 0, w: 2, h: 2, hp, maxHp: hp,
+      weakDx: Math.floor(Math.random() * 2), weakDy: Math.floor(Math.random() * 2),
+      flash: 0
+    });
+    game.lastBossRound = game.round;
   }
 
   // Choose a fresh pattern (avoid repeating the current one), held for a few rows.
+  // As density rises, bias toward denser patterns and away from sparse ones.
   function pickPattern() {
+    const dense = ['chamber', 'wave', 'pinball', 'twinTunnel'];
+    const sparse = ['sparse', 'splitMiddle', 'sides'];
     const names = Object.keys(PATTERNS);
-    let name;
-    do { name = names[Math.floor(Math.random() * names.length)]; }
-    while (game.pattern && name === game.pattern.name && names.length > 1);
+    const weightOf = (n) => {
+      if (dense.includes(n)) return 1 + game.dens * 4;
+      if (sparse.includes(n)) return Math.max(0.15, 1 - game.dens * 2);
+      return 1;
+    };
+    let name, guard = 0;
+    do {
+      const total = names.reduce((s, n) => s + weightOf(n), 0);
+      let r = Math.random() * total;
+      name = names[0];
+      for (const n of names) { if ((r -= weightOf(n)) < 0) { name = n; break; } }
+    } while (game.pattern && name === game.pattern.name && names.length > 1 && ++guard < 8);
     return { name, ttl: 3 + Math.floor(Math.random() * 5), data: {} };
   }
 
@@ -478,7 +579,9 @@
 
   function checkDeath() {
     for (const b of game.blocks) {
-      if (!isToken(b) && b.hp > 0 && b.row >= layout.deathRow) return true;
+      if (isToken(b) || b.hp <= 0) continue;
+      const bottom = b.row + (b.h || 1) - 1;   // multi-cell blocks die by their bottom
+      if (bottom >= layout.deathRow) return true;
     }
     return false;
   }
@@ -587,6 +690,21 @@
     game.score += 1 * scoreMult();
     spawnBreakParticles(b);
     if (b.type === T.BOMB) explode(b);
+    if (b.type === T.SPLIT) splitBlock(b);
+  }
+
+  // Splitter: on death, spawn up to two half-HP normal children in adjacent empty
+  // cells. Children are plain blocks, so there is no infinite cascade.
+  function splitBlock(b) {
+    const childHp = Math.max(1, Math.ceil((b.maxHp || 2) / 2));
+    const spots = [[b.col - 1, b.row], [b.col + 1, b.row], [b.col, b.row - 1], [b.col, b.row + 1]];
+    let made = 0;
+    for (const [col, row] of spots) {
+      if (made >= 2) break;
+      if (col < 0 || col >= COLS || row < 0 || blockAt(col, row)) continue;
+      game.blocks.push({ id: game.nextId++, type: T.BLOCK, shape: 'square', col, row, hp: childHp, maxHp: childHp, flash: 1 });
+      made++;
+    }
   }
 
   function explode(b) {
@@ -707,14 +825,19 @@
     const row0 = Math.floor((ball.y - ball.r - layout.gridTop) / c);
     const row1 = Math.floor((ball.y + ball.r - layout.gridTop) / c);
 
+    // A multi-cell (boss) block can be found via several cells — resolve it once.
+    const seen = ball._seen || (ball._seen = new Set());
+    seen.clear();
+
     for (let col = col0; col <= col1; col++) {
       for (let row = row0; row <= row1; row++) {
         const b = blockAt(col, row);
-        if (!b) continue;
-        const box = cellBox(col, row);
+        if (!b || seen.has(b.id)) continue;
+        seen.add(b.id);
 
         if (isToken(b)) {
           // pickup: circle vs circle
+          const box = cellBox(b.col, b.row);
           const d = Math.hypot(ball.x - box.cx, ball.y - box.cy);
           if (d < ball.r + c * 0.3) {
             const type = b.type;
@@ -724,12 +847,31 @@
           continue;
         }
 
+        if (b.type === T.BOSS) {
+          // Solid 2x2 that bounces everywhere but only takes damage on its weak cell.
+          const box = blockBox(b);
+          const px = ball.x, py = ball.y;                 // pre-bounce position
+          if (resolveAABB(ball, box)) {
+            // contact point on the box surface (from the pre-bounce center)
+            const cxp = clamp(px, box.x, box.x + box.w);
+            const cyp = clamp(py, box.y, box.y + box.h);
+            const half = box.w / 2, halfH = box.h / 2;
+            const wx = box.x + b.weakDx * half, wy = box.y + b.weakDy * halfH;
+            if (cxp >= wx && cxp <= wx + half && cyp >= wy && cyp <= wy + halfH) {
+              hitBlock(ball, b);
+            }
+          }
+          continue;
+        }
+
         if (isTriangle(b)) {
+          const box = cellBox(b.col, b.row);
           if (resolveTriangle(ball, b, box)) hitBlock(ball, b);
           continue;
         }
 
         // square AABB
+        const box = cellBox(b.col, b.row);
         if (resolveAABB(ball, box)) hitBlock(ball, b);
       }
     }
@@ -838,7 +980,7 @@
   }
 
   function spawnHitParticles(b) {
-    const box = cellBox(b.col, b.row);
+    const box = blockBox(b);
     for (let i = 0; i < 4; i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = 40 + Math.random() * 90;
@@ -849,8 +991,9 @@
     }
   }
   function spawnBreakParticles(b) {
-    const box = cellBox(b.col, b.row);
-    for (let i = 0; i < 12; i++) {
+    const box = blockBox(b);
+    const n = b.type === T.BOSS ? 26 : 12;
+    for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = 60 + Math.random() * 160;
       game.particles.push({
@@ -865,7 +1008,10 @@
   // ---------------------------------------------------------------------
   function blockColor(b) {
     if (b.type === T.BOMB) return '#ff8a3e';
-    const denom = game.round * 2 + 8;
+    if (b.type === T.SPLIT) return '#7dff9b';   // splitter = neon green
+    if (b.type === T.BOSS) return '#ff4d6d';    // boss body = danger red
+    // Hue tracks HP relative to current firepower, so "hot" = tanky for you now.
+    const denom = Math.max(8, firepower() * 1.2);
     const ratio = Math.min(b.hp / denom, 1);
     const hue = 185 - ratio * 185; // cyan(185) -> red(0)
     return `hsl(${hue}, 90%, 60%)`;
@@ -988,9 +1134,10 @@
   }
 
   function drawBlock(b) {
-    const box = cellBox(b.col, b.row);
-    if (isToken(b)) return drawToken(b, box);
+    if (isToken(b)) return drawToken(b, cellBox(b.col, b.row));
+    if (b.type === T.BOSS) return drawBoss(b);
 
+    const box = cellBox(b.col, b.row);
     const color = blockColor(b);
     ctx.save();
     ctx.shadowColor = color;
@@ -1013,8 +1160,54 @@
     ctx.font = `700 ${Math.round(layout.cell * 0.34)}px -apple-system, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const label = b.type === T.BOMB ? '✸' : String(b.hp);
-    ctx.fillText(label, box.cx, box.cy + 1);
+    ctx.fillText(b.type === T.BOMB ? '✸' : String(b.hp), box.cx, box.cy + 1);
+    ctx.textBaseline = 'alphabetic';
+
+    // splitter badge: two little arrows pointing apart (it splits when destroyed)
+    if (b.type === T.SPLIT) {
+      const s = layout.cell * 0.12, my = box.y + s * 1.4;
+      ctx.fillStyle = '#eafff2';
+      ctx.beginPath(); // left arrow
+      ctx.moveTo(box.cx - s * 2.2, my); ctx.lineTo(box.cx - s * 0.8, my - s); ctx.lineTo(box.cx - s * 0.8, my + s); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); // right arrow
+      ctx.moveTo(box.cx + s * 2.2, my); ctx.lineTo(box.cx + s * 0.8, my - s); ctx.lineTo(box.cx + s * 0.8, my + s); ctx.closePath(); ctx.fill();
+    }
+  }
+
+  // Rare 2x2 armored boss: plated body, one glowing weak-point cell shows the HP.
+  function drawBoss(b) {
+    const box = blockBox(b);
+    const color = '#ff4d6d';
+    ctx.save();
+    ctx.shadowColor = color; ctx.shadowBlur = 16 + (b.flash > 0 ? 16 * b.flash : 0);
+    roundRect(box.x, box.y, box.w, box.h, box.w * 0.07);
+    ctx.fillStyle = withAlpha(color, 0.16); ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = color; ctx.stroke();
+    ctx.restore();
+
+    // plating cross-lines
+    ctx.strokeStyle = withAlpha(color, 0.35); ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(box.x + box.w / 2, box.y); ctx.lineTo(box.x + box.w / 2, box.y + box.h);
+    ctx.moveTo(box.x, box.y + box.h / 2); ctx.lineTo(box.x + box.w, box.y + box.h / 2);
+    ctx.stroke();
+
+    // glowing weak cell
+    const half = box.w / 2, halfH = box.h / 2;
+    const wx = box.x + b.weakDx * half, wy = box.y + b.weakDy * halfH;
+    const pulse = 0.6 + 0.4 * Math.sin(performance.now() / 200);
+    ctx.save();
+    ctx.shadowColor = '#ffe36b'; ctx.shadowBlur = 18 * pulse;
+    roundRect(wx + 4, wy + 4, half - 8, halfH - 8, 6);
+    ctx.fillStyle = withAlpha('#ffe36b', 0.4); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#ffe36b'; ctx.stroke();
+    ctx.restore();
+
+    // hp on the weak cell
+    ctx.fillStyle = '#fff';
+    ctx.font = `700 ${Math.round(layout.cell * 0.34)}px -apple-system, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(b.hp), wx + half / 2, wy + halfH / 2 + 1);
     ctx.textBaseline = 'alphabetic';
   }
 

@@ -13,10 +13,23 @@ as an installable PWA.
   first bounce), **click** to fire.
 - **iPhone:** **drag** anywhere to aim, **release** to fire.
 - **RECALL** button: instantly pull the balls back and skip to the next round.
-- Each round the blocks descend one row. Blocks show a number = hits to destroy.
-  Collect tokens: **+1 ball**, **×2 damage**, **multi-ball**, **laser**, **pierce**,
-  **freeze**, **score ×2**, **shield**. Bomb blocks (✸) explode their neighbors.
-- You lose when a block crosses the dashed line by the cannon (a shield saves you once).
+- The board drops a **chunk** of rows every couple of turns (revealing layout
+  patterns — tunnels, chambers, funnels…). Blocks show a number = hits to destroy.
+  Collect tokens: mostly **+1 ball** and **×2 damage** (each ball keeps its own
+  damage tier — a ball that grabs several 2× tokens climbs 2→4→8… and changes
+  colour), plus occasional **multi-ball**, **laser**, **pierce**, **freeze**, **score ×2**.
+- **Rare special blocks:** **splitters** (neon-green, marked with ↔) split into two
+  smaller blocks when destroyed, and a **boss** (red 2×2) is armored everywhere except
+  one glowing weak cell — funnel your balls into it.
+- You lose when a block crosses the dashed line by the cannon.
+
+## Difficulty
+
+Difficulty scales off your **firepower** (total ball damage × a coverage bonus), not
+the round number — so blocks get tankier and boards get denser exactly as you grow
+stronger, and it's always a challenge no matter how many upgrades you grab. The knobs
+live at the top of `js/game.js` (`HP_A`, `HP_P`, `COVERAGE`, `DENS_*`, `SPLIT_CHANCE`,
+`BOSS_*`).
 
 ## Run it locally
 
